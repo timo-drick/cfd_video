@@ -9,36 +9,49 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 
-interface VideoPlayerState {
-    val time: Long //Timestamp milliseconds
-    val progress: Float //from 0 to 1 -> 0 is start and 1 is end
-    val aspectRatio: Float
-    fun seek(position: Float)
-    fun togglePause()
 
-}
+class FFmpegVideoPlayerState {
+    private val kContext = KAVFormatContext()
 
-class FFmpegVideoPlayerState: VideoPlayerState {
-    private val decoder = FFMPEGVideoDecoder()
-
-    override var time: Long = 0L
+    var time: Long = 0L
         internal set
-    override var progress: Float by mutableStateOf(0f)
+    var progress: Float by mutableStateOf(0f)
         internal set
-    override var aspectRatio: Float by mutableStateOf(1f)
+    var aspectRatio: Float by mutableStateOf(1f)
         internal set
 
-    fun open(file: String): MediaFile = decoder.open(file)
+    fun open(file: String) {
+        kContext.openInput(file)
+    }
+
+    fun close() {
+        kContext.closeInput()
+    }
+
+    fun streams(): List<KVideoStream> = kContext.findVideoStreams()
+    fun codec(stream: KVideoStream): KAVCodec = kContext.findCodec(stream)
+
+    fun openFrameGrabber(
+        stream: KVideoStream,
+        hwDecoder: KHWDecoder? = null,
+        targetSize: IntSize? = null
+    ) = KFrameGrabber(stream, kContext, hwDecoder, targetSize)
+
+    fun closeFrameGrabber(frameGrabber: KFrameGrabber) {
+        frameGrabber.close()
+    }
 
     internal var seekPosition: Float = -1f
 
-    override fun seek(position: Float) {
+    fun seek(position: Float) {
         seekPosition = position
     }
 
-    override fun togglePause() {
+    fun togglePause() {
         //TODO
     }
 
@@ -65,12 +78,14 @@ fun VideoPlayerFFMpeg(
     val videoImage = remember { mutableStateOf<ImageBitmap?>(null) }
 
     LaunchedEffect(file, Dispatchers.IO) {
-        val media = state.open(file)
-        val stream = media.streams.first()
+        state.open(file)
+        val stream = state.streams().first()
+        val codec = state.codec(stream)
         state.aspectRatio = stream.width.toFloat() / stream.height.toFloat()
-        val frameGrabber = media.openFrameGrabber(stream, divider = 1, hardwareAcceleration = true)
+
+        val frameGrabber = state.openFrameGrabber(stream, codec.hwDecoder.firstOrNull())
         var startTs = -1L
-        while (true) {
+        while (isActive) {
             withFrameMillis { currentTs ->
                 val newTs = currentTs
                 if (startTs < 0) startTs = newTs
@@ -82,8 +97,8 @@ fun VideoPlayerFFMpeg(
                 }
                 val pos = newTs - startTs
                 //println("Ts millis: $pos")
-                frameGrabber.nextFrame(pos)
-                videoImage.value = frameGrabber.imageBitmap
+                frameGrabber.grabNextFrame(pos)
+                videoImage.value = frameGrabber.composeImage
                 state.time = pos
                 state.progress = (pos.toDouble() / stream.durationMillis.toDouble()).toFloat()
                 frame++
@@ -95,9 +110,8 @@ fun VideoPlayerFFMpeg(
             }
             //delay(5)
         }
-
-        //media.closeFrameGrabber()
-        //decoder.close(media)
+        state.closeFrameGrabber(frameGrabber)
+        state.close()
     }
 
 
