@@ -3,6 +3,7 @@ package de.appsonair.cppffmpeg
 import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.unit.IntSize
 import org.bytedeco.ffmpeg.avcodec.AVCodecContext
+import org.bytedeco.ffmpeg.avcodec.AVCodecHWConfig
 import org.bytedeco.ffmpeg.avcodec.AVCodecParameters
 import org.bytedeco.ffmpeg.avcodec.AVPacket
 import org.bytedeco.ffmpeg.avformat.AVFormatContext
@@ -21,6 +22,7 @@ import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.ImageInfo
 import java.nio.charset.Charset
 import kotlin.math.absoluteValue
+import kotlin.math.min
 
 enum class KAVMediaType(val id: Int) {
     UNKNOWN(avutil.AVMEDIA_TYPE_UNKNOWN),
@@ -53,7 +55,10 @@ data class KVideoStream(
     override val id: Int,
     val width: Int,
     val height: Int,
-    val durationMillis: Long
+    val durationMillis: Long,
+    val fps: Float,
+    val bitrate: Long,
+    val codec: String
 ): KAVStream
 data class KAudioStream(
     override val id: Int
@@ -96,11 +101,17 @@ class KAVFormatContext {
                 val width = stream.codecpar().width()
                 val height = stream.codecpar().height()
                 val duration = stream.duration() * 1000L * stream.time_base().num().toLong() / stream.time_base().den().toLong()
+                val fps = stream.avg_frame_rate().num().toFloat() / stream.avg_frame_rate().den().toFloat()
+                val bitrate = stream.codecpar().bit_rate()
+                val codecName = avcodec.avcodec_get_name(stream.codecpar().codec_id()).getString(Charset.defaultCharset())
                 KVideoStream(
                     id = i,
                     width = width,
                     height = height,
-                    durationMillis = duration
+                    durationMillis = duration,
+                    fps = fps,
+                    bitrate = bitrate,
+                    codec = codecName
                 )
             } else {
                 null
@@ -112,7 +123,7 @@ class KAVFormatContext {
         val codecId = stream.codecpar().codec_id()
         val type = stream.codecpar().codec_type() // Normally this is 0 -> avutil.AV_HWDEVICE_TYPE_NONE
         val name = avcodec.avcodec_get_name(codecId).getString(Charset.defaultCharset())
-        val hwDecoder = findHWDecoder(type) // search for hardware accelerated decoders
+        val hwDecoder = findHWDecoder(codecId) // search for hardware accelerated decoders
         return KAVCodec(
             id = codecId,
             name = name,
@@ -120,13 +131,27 @@ class KAVFormatContext {
         )
     }
 
-    private fun findHWDecoder(codecType: Int): List<KHWDecoder> {
+    private fun findHWDecoder(codecId: Int): List<KHWDecoder> {
+        val codec = avcodec.avcodec_find_decoder(codecId)
+            ?: throw IllegalStateException("No codec found!")
+        val codecType = codec.type()
+        val supportHwTypes = mutableSetOf<Int>()
+        var index = 0
+        do {
+            val config: AVCodecHWConfig? = avcodec.avcodec_get_hw_config(codec, index)
+            if (config != null && (config.methods() and avcodec.AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX > 0)) {
+                supportHwTypes.add(config.device_type())
+            }
+        } while (config != null && index++ < 10)
+
         val decoder = mutableListOf<KHWDecoder>()
         var hwType = avutil.av_hwdevice_iterate_types(codecType)
-        var counter = 0
-        while (hwType != avutil.AV_HWDEVICE_TYPE_NONE && counter++ < 20) {
+
+        index = 0
+        while (hwType != avutil.AV_HWDEVICE_TYPE_NONE && index++ < 20) {
             val name = avutil.av_hwdevice_get_type_name(hwType).getString(Charset.defaultCharset())
-            decoder.add(KHWDecoder(hwType, name))
+            if (hwType in supportHwTypes)
+                decoder.add(KHWDecoder(hwType, name))
             hwType = avutil.av_hwdevice_iterate_types(hwType)
         }
         return decoder
@@ -145,7 +170,10 @@ class KAVCodecContext(codecParams: AVCodecParameters, hwDecoder: KHWDecoder? = n
             //val hwConfig = avcodec.avcodec_get_hw_config(codec, 0)
             // HWAccel
             val hwDeviceCtx = AVBufferRef()
-            avutil.av_hwdevice_ctx_create(hwDeviceCtx, hwDecoder.type, null as BytePointer?, null, 0)
+            errCheck(
+                avutil.av_hwdevice_ctx_create(hwDeviceCtx, hwDecoder.type, null as BytePointer?, null, 0),
+                "Unable to create hw decoder ${hwDecoder.type}:${hwDecoder.name} for ${codec.name().getString(Charset.defaultCharset())}"
+            )
             codecCtx.hw_device_ctx(avutil.av_buffer_ref(hwDeviceCtx))
         }
 
@@ -161,9 +189,9 @@ class KAVCodecContext(codecParams: AVCodecParameters, hwDecoder: KHWDecoder? = n
 }
 
 class KFrameGrabber(
-    kStream: KVideoStream,
+    val kStream: KVideoStream,
     kFmtCtx: KAVFormatContext,
-    hwDecoder: KHWDecoder? = null,
+    val hwDecoder: KHWDecoder? = null,
     targetSize: IntSize? = null
 ) {
     private val fmtCtx = kFmtCtx.fmtCtx
@@ -171,19 +199,18 @@ class KFrameGrabber(
     private val kCodecContext = KAVCodecContext(stream.codecpar(), hwDecoder)
 
     private val codecCtx = kCodecContext.codecCtx
-    private val hwFormat = codecCtx.hwaccel()?.pix_fmt() ?: 117
 
-    private val targetWidth = targetSize?.width ?: codecCtx.width()
-    private val targetHeight = targetSize?.height ?: codecCtx.height()
+    val targetWidth = targetSize?.width ?: codecCtx.width()
+    val targetHeight = targetSize?.height ?: codecCtx.height()
 
     private val dstFormat = avutil.AV_PIX_FMT_BGRA // Format matches the internal skia image format
     private val skiaFormat = ImageInfo(targetWidth, targetHeight, ColorType.BGRA_8888, ColorAlphaType.OPAQUE) //N32 == BGRA_8888 Native format
 
-    //private val format = avutil.AV_PIX_FMT_RGB565 // 2 Byte per pixel -> half memory size for one image
-    //private val bitmapInfo = ImageInfo(targetWidth, targetHeight, ColorType.RGB_565, ColorAlphaType.OPAQUE)
+    //private val dstFormat = avutil.AV_PIX_FMT_RGB565 // 2 Byte per pixel -> half memory size for one image
+    //private val skiaFormat = ImageInfo(targetWidth, targetHeight, ColorType.RGB_565, ColorAlphaType.OPAQUE)
 
-    private val timeBaseNum = stream.time_base().num()
-    private val timeBaseDen = stream.time_base().den()
+    private val timeBaseNum = stream.time_base().num().toLong()
+    private val timeBaseDen = stream.time_base().den().toLong()
 
     //Prepare rgb image
     private val numBytes = avutil.av_image_get_buffer_size(dstFormat, targetWidth, targetHeight, 1)
@@ -208,8 +235,10 @@ class KFrameGrabber(
     }
 
     private val pkt = AVPacket()
-    private var decodedFrameCounter = 0L
-    private var bitmapFrameCounter = 0L
+    var decodedFrameCounter = 0L
+        private set
+    var bitmapFrameCounter = 0L
+        private set
     private var currentImageTS: Long = 0L
     fun grabNextFrame(ts: Long) {
         //TODO seek to ts when diff is to high or negative diff
@@ -232,10 +261,8 @@ class KFrameGrabber(
                 val rf = avformat.av_read_frame(fmtCtx, pkt)
                 if (rf < 0) return
             } while (pkt.stream_index() != stream.index())
-            //println("receive frame")
             val r1 = avcodec.avcodec_send_packet(codecCtx, pkt)
             avcodec.av_packet_unref(pkt)
-            //val r2 = avcodec.avcodec_receive_frame(codecCtx, frame)
             val r2 = avcodec.avcodec_receive_frame(codecCtx, hwFrame)
             decodedFrameCounter++
             if (r2 < 0) {
@@ -247,10 +274,13 @@ class KFrameGrabber(
 
             val isPast = frameTime < ts
         } while (r2 < 0 || (isPast && repeatCounter++ < 10))
+        val hwFormat = codecCtx.hwaccel()?.pix_fmt() ?: -1
         val srcFrame = if (hwFrame.format() == hwFormat) {
             //Transfer data from hardware accel device to memory
-            if (avutil.av_hwframe_transfer_data(frame, hwFrame, 0) < 0)
-                throw IllegalStateException("Error transferring data to system memory!")
+            errCheck(
+                avutil.av_hwframe_transfer_data(frame, hwFrame, 0),
+                "Error transferring data to system memory!"
+            )
             frame
         } else {
             hwFrame
@@ -266,13 +296,15 @@ class KFrameGrabber(
             swscale.SWS_BILINEAR, null, null, null as DoublePointer?
         )
         //println("Frame format: ${frame.format()}")
-        val r3 = swscale.sws_scale(
-            swsCtx, srcFrame.data(), srcFrame.linesize(),
-            0, codecCtx.height(),
-            pFrameRGB.data(),
-            pFrameRGB.linesize()
+        errCheck(
+            swscale.sws_scale(
+                swsCtx, srcFrame.data(), srcFrame.linesize(),
+                0, codecCtx.height(),
+                pFrameRGB.data(),
+                pFrameRGB.linesize()
+            ),
+            "sws_scale error!"
         )
-        if (r3 < 0) throw IllegalStateException("swscale error: $r3")
         // Copy data to java array
         pFrameRGB.data(0).get(jArray)
         // Copy java array to bitmap
@@ -281,3 +313,20 @@ class KFrameGrabber(
     }
 }
 
+fun errCheck(returnCode: Int, errorMessage: String? = null) {
+    if (returnCode < 0) {
+        val message = if (errorMessage != null)
+            "$errorMessage - code $returnCode: ${av_err2str(returnCode)}"
+        else
+            "$returnCode: ${av_err2str(returnCode)}"
+        throw IllegalStateException(message)
+    }
+}
+
+fun av_err2str(errNum: Int): String {
+    val charArray = ByteArray(avutil.AV_ERROR_MAX_STRING_SIZE)
+    avutil.av_strerror(errNum, charArray, avutil.AV_ERROR_MAX_STRING_SIZE.toLong())
+    val string = charArray.decodeToString()
+    val endIndex = min(string.indexOf(Char(0)), avutil.AV_ERROR_MAX_STRING_SIZE)
+    return string.subSequence(0, endIndex).toString()
+}

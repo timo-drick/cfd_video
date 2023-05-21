@@ -22,10 +22,21 @@ class FFmpegVideoPlayerState {
     var progress: Float by mutableStateOf(0f)
         internal set
     var aspectRatio: Float by mutableStateOf(1f)
+        private set
+    var displayFPS: Float by mutableStateOf(0f)
         internal set
+    var decodedFPS: Float by mutableStateOf(0f)
+        internal set
+
+    var frameGrabber: KFrameGrabber? by mutableStateOf(null)
+        private set
+
+    var metadata: Map<String, String> by mutableStateOf(emptyMap())
+        private set
 
     fun open(file: String) {
         kContext.openInput(file)
+        metadata = kContext.findMetadata()
     }
 
     fun close() {
@@ -35,14 +46,19 @@ class FFmpegVideoPlayerState {
     fun streams(): List<KVideoStream> = kContext.findVideoStreams()
     fun codec(stream: KVideoStream): KAVCodec = kContext.findCodec(stream)
 
-    fun openFrameGrabber(
+    fun play(
         stream: KVideoStream,
         hwDecoder: KHWDecoder? = null,
         targetSize: IntSize? = null
-    ) = KFrameGrabber(stream, kContext, hwDecoder, targetSize)
+    ) {
+        frameGrabber?.close() // close running frame grabber
+        frameGrabber = KFrameGrabber(stream, kContext, hwDecoder, targetSize)
+        aspectRatio = stream.width.toFloat() / stream.height.toFloat()
+    }
 
-    fun closeFrameGrabber(frameGrabber: KFrameGrabber) {
-        frameGrabber.close()
+    fun stop() {
+        frameGrabber?.close()
+        frameGrabber = null
     }
 
     internal var seekPosition: Float = -1f
@@ -66,12 +82,6 @@ fun VideoPlayerFFMpeg(
     state: FFmpegVideoPlayerState = remember { FFmpegVideoPlayerState() },
     file: String
 ) {
-    DisposableEffect(state) {
-
-        onDispose {
-
-        }
-    }
     var frameTime: Long by remember { mutableStateOf(0L) }
 
     var frame by remember { mutableStateOf(0) }
@@ -81,36 +91,53 @@ fun VideoPlayerFFMpeg(
         state.open(file)
         val stream = state.streams().first()
         val codec = state.codec(stream)
-        state.aspectRatio = stream.width.toFloat() / stream.height.toFloat()
-
-        val frameGrabber = state.openFrameGrabber(stream, codec.hwDecoder.firstOrNull())
+        //state.play(stream, null)
+        val scale = 2
+        val targetSize = IntSize(stream.width / scale, stream.height / scale)
+        state.play(stream, codec.hwDecoder.firstOrNull(), targetSize)
+        val frameGrabber = requireNotNull(state.frameGrabber) { "Frame grabber not initialized!" }
         var startTs = -1L
+        var lastDisplayFrameCount = 0L
+        var lastDecodedFrameCount = 0L
+        var lastTs = -1L
         while (isActive) {
             withFrameMillis { currentTs ->
-                val newTs = currentTs
-                if (startTs < 0) startTs = newTs
+                if (startTs < 0) {
+                    startTs = currentTs
+                    lastTs = currentTs
+                }
                 if (state.seekPosition >= 0) {
                     //Set new start time
                     val seekMillis: Long = (stream.durationMillis * state.seekPosition.toDouble()).toLong()
-                    startTs = newTs - seekMillis
+                    startTs = currentTs - seekMillis
                     state.seekPosition = -1f
                 }
-                val pos = newTs - startTs
+                val pos = currentTs - startTs
                 //println("Ts millis: $pos")
                 frameGrabber.grabNextFrame(pos)
                 videoImage.value = frameGrabber.composeImage
                 state.time = pos
                 state.progress = (pos.toDouble() / stream.durationMillis.toDouble()).toFloat()
                 frame++
-                /*if (frame % 60 == 0) {
-                    val fps = 1f / ((newTs - ts).toFloat() / 1000f / 60f)
-                    println("Frame: $frame fps: $fps")
-                    ts = newTs
-                }*/
+                if (frame % 60 == 0) {
+                    val time = (currentTs - lastTs).toFloat() / 1000f
+
+                    val newDisplayFrameCount = frameGrabber.bitmapFrameCounter
+                    val displayFrameCount = newDisplayFrameCount - lastDisplayFrameCount
+                    state.displayFPS = displayFrameCount.toFloat() / time
+
+                    val newDecodedFrameCount = frameGrabber.decodedFrameCounter
+                    val decodedFrameCount = newDecodedFrameCount - lastDecodedFrameCount
+                    state.decodedFPS = decodedFrameCount.toFloat() / time
+
+                    lastDisplayFrameCount = newDisplayFrameCount
+                    lastDecodedFrameCount = newDecodedFrameCount
+                    lastTs = currentTs
+                }
             }
             //delay(5)
         }
-        state.closeFrameGrabber(frameGrabber)
+        state.stop()
         state.close()
     }
 
