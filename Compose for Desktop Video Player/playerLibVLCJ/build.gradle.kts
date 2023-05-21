@@ -6,6 +6,7 @@ plugins {
 }
 dependencies {
     implementation(compose.desktop.currentOs)
+    implementation("uk.co.caprica:vlcj:4.8.2")
 }
 
 
