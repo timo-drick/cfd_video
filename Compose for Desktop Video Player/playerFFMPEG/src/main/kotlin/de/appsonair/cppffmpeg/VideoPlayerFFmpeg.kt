@@ -82,8 +82,6 @@ fun VideoPlayerFFMpeg(
     state: FFmpegVideoPlayerState = remember { FFmpegVideoPlayerState() },
     file: String
 ) {
-    var frameTime: Long by remember { mutableStateOf(0L) }
-
     var frame by remember { mutableStateOf(0) }
     val videoImage = remember { mutableStateOf<ImageBitmap?>(null) }
 
@@ -91,10 +89,10 @@ fun VideoPlayerFFMpeg(
         state.open(file)
         val stream = state.streams().first()
         val codec = state.codec(stream)
-        //state.play(stream, null)
-        val scale = 2
+        val scale = 1
         val targetSize = IntSize(stream.width / scale, stream.height / scale)
-        state.play(stream, codec.hwDecoder.firstOrNull(), targetSize)
+        //state.play(stream, null) // No hw accel
+        state.play(stream, codec.hwDecoder.firstOrNull(), targetSize) // Hw accel
         val frameGrabber = requireNotNull(state.frameGrabber) { "Frame grabber not initialized!" }
         var startTs = -1L
         var lastDisplayFrameCount = 0L
