@@ -11,7 +11,7 @@ possible when the displayed resolution is scaled down.
 This implementation leverages hardware acceleration through FFmpeg for video decoding.
 You can observe these playback
 scenarios in the provided demonstration video: 
-![Demonstration video](testing_different_resolution_fps.m4v).
+![Demonstration video](doc/testing_different_resolution_fps.mp4).
 
 Please note that my display is limited to  60fps.
 
