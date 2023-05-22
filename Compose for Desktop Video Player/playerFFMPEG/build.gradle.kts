@@ -18,7 +18,7 @@ dependencies {
 
 compose.desktop {
     application {
-        mainClass = "MainKt"
+        mainClass = "de.appsonair.ui.MainKt"
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "VideoPlayerSample"

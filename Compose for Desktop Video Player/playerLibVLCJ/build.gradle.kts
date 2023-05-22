@@ -12,7 +12,7 @@ dependencies {
 
 compose.desktop {
     application {
-        mainClass = "MainKt"
+        mainClass = "de.appsonair.compose.MainKt"
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "video-lib-vlcj"
