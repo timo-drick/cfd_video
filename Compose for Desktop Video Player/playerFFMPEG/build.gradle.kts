@@ -12,8 +12,7 @@ repositories {
 
 dependencies {
     implementation(compose.desktop.currentOs)
-    implementation("org.bytedeco:ffmpeg-platform:6.0-1.5.9-SNAPSHOT")
-    //implementation("org.bytedeco:ffmpeg-platform-gpl:6.0-1.5.9-SNAPSHOT")
+    implementation("org.bytedeco:ffmpeg-platform:${Version.ffmpeg}")
 }
 
 compose.desktop {

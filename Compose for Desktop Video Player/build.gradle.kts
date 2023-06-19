@@ -1,7 +1,7 @@
 plugins {
     kotlin("multiplatform") version Version.kotlin
     id("org.jetbrains.compose") version Version.compose
-    id("com.github.ben-manes.versions") version "0.46.0"
+    id("com.github.ben-manes.versions") version "0.47.0"
 }
 
 group = Group.groupId
