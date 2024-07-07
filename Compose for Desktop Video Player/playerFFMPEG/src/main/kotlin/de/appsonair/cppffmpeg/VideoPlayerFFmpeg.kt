@@ -89,6 +89,8 @@ fun VideoPlayerFFMpeg(
         state.open(file)
         val stream = state.streams().first()
         val codec = state.codec(stream)
+        println("Codec: ${codec.name}")
+        codec.hwDecoder.forEach { println("   Decoder: ${it.name}") }
         val scale = 1
         val targetSize = IntSize(stream.width / scale, stream.height / scale)
         //state.play(stream, null) // No hw accel

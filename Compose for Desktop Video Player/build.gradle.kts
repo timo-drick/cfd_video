@@ -1,7 +1,8 @@
 plugins {
-    kotlin("multiplatform") version Version.kotlin
-    id("org.jetbrains.compose") version Version.compose
-    id("com.github.ben-manes.versions") version "0.47.0"
+    kotlin("multiplatform") version Version.kotlin apply false
+    kotlin("plugin.compose") version Version.kotlin apply false
+    id("org.jetbrains.compose") version Version.compose apply false
+    id("com.github.ben-manes.versions") version Version.benManesPlugin
 }
 
 group = Group.groupId
@@ -12,13 +13,6 @@ allprojects {
         google()
         mavenCentral()
         maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
-    }
-}
-
-kotlin {
-    jvm {
-        jvmToolchain(11)
-        withJava()
     }
 }
 

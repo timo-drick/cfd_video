@@ -3,11 +3,8 @@ import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
     kotlin("jvm")
+    id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.compose") version Version.compose
-}
-
-repositories {
-    maven("https://oss.sonatype.org/content/repositories/snapshots")
 }
 
 dependencies {

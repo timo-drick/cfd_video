@@ -12,7 +12,7 @@ This implementation leverages hardware acceleration through FFmpeg for video dec
 You can observe these playback
 scenarios in the provided demonstration video:
 
-<img src="doc/demo1.webp" width="960">
+<img src="doc/demo1.webp" width="720">
 
 Please note that my display is limited to  60fps.
 
